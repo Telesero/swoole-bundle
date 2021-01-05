@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace K911\Swoole\Server\WorkerHandler;
 
+use K911\Swoole\Process\Signal\Exception\SignalException;
 use K911\Swoole\Server\Runtime\HMR\HotModuleReloaderInterface;
 use Swoole\Server;
 
@@ -33,8 +34,16 @@ final class HMRWorkerStartHandler implements WorkerStartHandlerInterface
             return;
         }
 
+        dump('tick registered');
+
         $worker->tick($this->interval, function () use ($worker): void {
             $this->hmr->tick($worker);
+            if (!\pcntl_signal_dispatch()) {
+                $errorNumber = \posix_get_last_error();
+                $errorMessage = \pcntl_strerror($errorNumber);
+
+                throw new SignalException(\sprintf('PCNTL Error (%d): %s', $errorNumber, $errorMessage));
+            }
         });
     }
 }

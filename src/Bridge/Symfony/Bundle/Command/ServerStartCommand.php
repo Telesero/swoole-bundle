@@ -7,6 +7,8 @@ namespace K911\Swoole\Bridge\Symfony\Bundle\Command;
 use K911\Swoole\Bridge\Symfony\Bundle\Exception\CouldNotCreatePidFileException;
 use K911\Swoole\Bridge\Symfony\Bundle\Exception\PidFileNotAccessibleException;
 use function K911\Swoole\get_object_property;
+use K911\Swoole\Process\Signal\PcntlSignalHandler;
+use K911\Swoole\Process\Signal\Signal;
 use K911\Swoole\Server\HttpServer;
 use K911\Swoole\Server\HttpServerConfiguration;
 use Symfony\Component\Console\Input\InputInterface;
@@ -47,6 +49,19 @@ final class ServerStartCommand extends AbstractServerStartCommand
      */
     protected function startServer(HttpServerConfiguration $serverConfiguration, HttpServer $server, SymfonyStyle $io): void
     {
+        $signalHandler = new PcntlSignalHandler();
+        $signalHandler->register(function (int $signalNo) use ($server): void {
+            $swooleServer = $server->getServer();
+            dump(\sprintf('Signal %d hit (process %d, swoole master pid %d, manager %d)', $signalNo, \getmypid(), $swooleServer->master_pid, $swooleServer->manager_pid));
+            if (\getmypid() !== $swooleServer->master_pid) {
+                try {
+                    $server->shutdown();
+                } catch (\Throwable $exception) {
+                    dump(\sprintf('except (process: %d)', \getmypid()));
+                }
+            }
+        }, Signal::term(), Signal::int());
+
         $pidFile = $serverConfiguration->getPidFile();
 
         if (!\touch($pidFile)) {

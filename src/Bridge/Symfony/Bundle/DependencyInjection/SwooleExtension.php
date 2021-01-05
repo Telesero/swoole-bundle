@@ -18,9 +18,11 @@ use K911\Swoole\Bridge\Symfony\HttpKernel\DebugHttpKernelRequestHandler;
 use K911\Swoole\Bridge\Symfony\Messenger\SwooleServerTaskTransportFactory;
 use K911\Swoole\Bridge\Symfony\Messenger\SwooleServerTaskTransportHandler;
 use K911\Swoole\Bridge\Upscale\Blackfire\WithProfiler;
+use K911\Swoole\Process\Signal\PcntlSignalHandler;
 use K911\Swoole\Server\Config\Socket;
 use K911\Swoole\Server\Config\Sockets;
 use K911\Swoole\Server\Configurator\ConfiguratorInterface;
+use K911\Swoole\Server\Configurator\WithProcess;
 use K911\Swoole\Server\HttpServer;
 use K911\Swoole\Server\HttpServerConfiguration;
 use K911\Swoole\Server\RequestHandler\AdvancedStaticFilesServer;
@@ -36,6 +38,7 @@ use K911\Swoole\Server\WorkerHandler\HMRWorkerStartHandler;
 use K911\Swoole\Server\WorkerHandler\WorkerStartHandlerInterface;
 use ReflectionMethod;
 use RuntimeException;
+use Swoole\Process;
 use Symfony\Component\Config\FileLocator;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Definition;
@@ -192,6 +195,7 @@ final class SwooleExtension extends Extension implements PrependExtensionInterfa
             'socket_type' => $socketType,
             'ssl_enabled' => $sslEnabled,
             'settings' => $settings,
+            'coroutine' => $coroutine,
         ] = $config;
 
         if ('auto' === $static['strategy']) {
@@ -211,6 +215,8 @@ final class SwooleExtension extends Extension implements PrependExtensionInterfa
 
         $settings['serve_static'] = $static['strategy'];
         $settings['public_dir'] = $static['public_dir'];
+        $settings['coroutine_enabled'] = $coroutine['enabled'];
+        $settings['coroutine_hooks'] = $coroutine['hooks'];
 
         if ('auto' === $settings['log_level']) {
             $settings['log_level'] = $this->isDebug($container) ? 'debug' : 'notice';
@@ -234,7 +240,30 @@ final class SwooleExtension extends Extension implements PrependExtensionInterfa
             ->addArgument($settings)
         ;
 
+        $this->registerSignalHandlers($runningMode, $container);
         $this->registerHttpServerHMR($hmr, $container);
+    }
+
+    private function registerSignalHandlers(string $runningMode, ContainerBuilder $container): void
+    {
+        if ('reactor' !== $runningMode) {
+            return;
+        }
+
+        if (\extension_loaded('pcntl') && \extension_loaded('posix')) {
+            $container->register(PcntlSignalHandler::class);
+        }
+
+        $container->register('swoole_bundle.server.http_server.configurator.with_process_signal_shutdown_handler')
+            ->setClass(WithProcess::class)
+            ->setAutowired(false)
+            ->setAutoconfigured(false)
+            ->setPublic(false)
+            ->setArguments([Process::class => new Reference('swoole_bundle.http_server.runtime.server_shutdown.signal_handler_swoole_process')])
+        ;
+
+        $def = $container->getDefinition('swoole_bundle.server.http_server.configurator.for_server_run_command');
+        $def->addArgument(new Reference('swoole_bundle.server.http_server.configurator.with_process_signal_shutdown_handler'));
     }
 
     private function registerHttpServerHMR(string $hmr, ContainerBuilder $container): void
